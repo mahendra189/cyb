@@ -155,6 +155,20 @@ def shodan_query(query: str) -> str:
     except Exception as e:
         return f"Error running shodan: {e}"
 
+@tool
+def run_shell_command(command: str) -> str:
+    """Execute an arbitrary shell command on the local system. Use this to run any tool not explicitly provided, write scripts, or interact with the OS."""
+    try:
+        # Security warning: In a real production system, you wouldn't expose raw shell access.
+        # Since this is a local hacker agent, it provides maximum flexibility.
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)
+        output = result.stdout
+        if result.stderr:
+            output += f"\nSTDERR:\n{result.stderr}"
+        return output if output else "Command executed successfully with no output."
+    except Exception as e:
+        return f"Command execution failed: {e}"
+
 
 # List of all tools to expose to the agent
 tools = [
@@ -169,5 +183,6 @@ tools = [
     subfinder_scan,
     wafw00f_scan,
     feroxbuster_scan,
-    shodan_query
+    shodan_query,
+    run_shell_command
 ]

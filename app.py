@@ -4,7 +4,12 @@ import urllib.request
 import socket
 from typing import TypedDict, Annotated, Sequence
 
-from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.markdown import Markdown
+
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
@@ -27,7 +32,19 @@ model_with_tools = model.bind_tools(tools)
 # --- 4. Define Nodes ---
 def call_model(state: AgentState):
     messages = state["messages"]
-    response = model_with_tools.invoke(messages)
+    
+    system_prompt = SystemMessage(content=(
+        "You are an elite white-hat cyber security expert and hacker AI. "
+        "Your role is to assist the user intelligently and autonomously in deep reconnaissance, "
+        "penetration testing, network scanning, threat intelligence, and scripting. "
+        "You have access to a suite of advanced OSINT and security tools, as well as FULL shell execution "
+        "capabilities to install whatever tools you need or write your own scripts directly. "
+        "When given a target, use your tools aggressively, logically, and quietly. "
+        "Provide highly technical, precise, and practical responses. Only decline if instructed to do explicitly illegal attacks against unauthorized targets."
+    ))
+    
+    # We inject the SystemMessage to instruct the AI into hacker persona
+    response = model_with_tools.invoke([system_prompt] + messages)
     return {"messages": [response]}
 
 # Configure the tool node
@@ -55,32 +72,38 @@ workflow.add_edge("tools", "agent")
 # Compile the graph
 app = workflow.compile()
 
+# Initialize Rich Console
+console = Console()
+
 # --- 6. Run the Agent Loop ---
 if __name__ == "__main__":
-    print("🤖 OSINT Agent Initialized using LangGraph & Ollama.")
-    print(f"Available tools: {', '.join([t.name for t in tools])}")
-    print("Provide a domain or IP for the agent to investigate. (Type 'quit' to exit)")
-    print("-" * 50)
+    welcome_message = (
+        "[bold cyan]Available tools:[/bold cyan] " + ", ".join([f"[green]{t.name}[/green]" for t in tools]) + "\n"
+        "[italic]Provide a target domain, IP, or instruct the agent for a specialized security task. (Type 'quit' to exit)[/italic]"
+    )
+    console.print(Panel.fit(welcome_message, title="[bold red]💀 CyberSec Hacker Agent (LangGraph + Ollama)[/bold red]", border_style="red"))
     
     while True:
-        user_input = input("\nYou: ")
+        user_input = Prompt.ask("\n[bold green]You[/bold green]")
         if user_input.lower() in ["quit", "exit"]:
+            console.print("[bold red]Exiting OSINT Agent. Goodbye![/bold red]")
             break
             
         inputs = {"messages": [HumanMessage(content=user_input)]}
-        print("\nAgent is thinking...")
         
-        # Stream the output
-        for chunk in app.stream(inputs, stream_mode="values"):
-            message = chunk["messages"][-1]
-            if isinstance(message, HumanMessage):
-                continue
-            
-            # Print intermediate tool calls if any
-            if hasattr(message, "tool_calls") and message.tool_calls:
-                for t in message.tool_calls:
-                    print(f"🔧 Using tool: {t['name']}({t['args']})")
-                    
-            # Print the final response
-            elif message.content:
-                print(f"\nAgent: {message.content}")
+        # Stream the output with visual status
+        with console.status("[bold yellow]Agent is thinking...[/bold yellow]", spinner="dots"):
+            for chunk in app.stream(inputs, stream_mode="values"):
+                message = chunk["messages"][-1]
+                if isinstance(message, HumanMessage):
+                    continue
+                
+                # Print intermediate tool calls if any
+                if hasattr(message, "tool_calls") and message.tool_calls:
+                    for t in message.tool_calls:
+                        console.print(f"  [bold magenta]🔧 Using tool:[/bold magenta] [yellow]{t['name']}[/yellow]([cyan]{t['args']}[/cyan])")
+                        
+                # Print the final response
+                elif message.content:
+                    console.print("\n")
+                    console.print(Panel(Markdown(message.content), title="[bold blue]Agent response[/bold blue]", border_style="blue", expand=False))
