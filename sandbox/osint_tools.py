@@ -3,6 +3,10 @@ import urllib.request
 import json
 import subprocess
 from langchain_core.tools import tool
+from rich.prompt import Confirm
+from rich.console import Console
+
+console = Console()
 
 # Basic Built-in Tools
 @tool
@@ -170,6 +174,13 @@ def run_shell_command(command: str) -> str:
     for dangerous in DANGEROUS_COMMANDS:
         if dangerous in command_lower:
             return f"❌ SAFEGUARD TRIGGERED: Execution of '{dangerous}' is blocked for local system safety. Try an alternative approach."
+            
+    # User permission request
+    console.print(f"\n[bold yellow]⚠️ Agent wants to run a shell command:[/bold yellow] [cyan]{command}[/cyan]")
+    is_approved = Confirm.ask("[bold red]Do you approve this command?[/bold red]", default=False)
+    
+    if not is_approved:
+        return "❌ User denied permission to run this command."
 
     try:
         # Security warning: In a real production system, you wouldn't expose raw shell access.
