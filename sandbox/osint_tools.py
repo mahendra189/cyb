@@ -6,6 +6,9 @@ from langchain_core.tools import tool
 from rich.prompt import Confirm
 from rich.console import Console
 
+# Import the new tool manager
+from sandbox.tool_manager import check_tool_installed, install_security_tool
+
 console = Console()
 
 # Basic Built-in Tools
@@ -208,5 +211,7 @@ tools = [
     wafw00f_scan,
     feroxbuster_scan,
     shodan_query,
+    check_tool_installed,
+    install_security_tool,
     run_shell_command
 ]
