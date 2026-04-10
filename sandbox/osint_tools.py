@@ -155,9 +155,22 @@ def shodan_query(query: str) -> str:
     except Exception as e:
         return f"Error running shodan: {e}"
 
+DANGEROUS_COMMANDS = [
+    "rm -rf", "mkfs", "dd ", "fdisk", "shutdown", "reboot", "halt", 
+    "poweroff", "passwd", "chown -R", "chmod -R", "> /dev/sda", 
+    ":(){ :|:& };:", "crontab -r", "wget -O - | sh", "curl | bash"
+]
+
 @tool
 def run_shell_command(command: str) -> str:
-    """Execute an arbitrary shell command on the local system. Use this to run any tool not explicitly provided, write scripts, or interact with the OS."""
+    """Execute an arbitrary shell command on the local system. Use this to run any tool not explicitly provided. Contains safeguards against destructive commands."""
+    
+    # Safeguard: Check for dangerous patterns
+    command_lower = command.lower()
+    for dangerous in DANGEROUS_COMMANDS:
+        if dangerous in command_lower:
+            return f"❌ SAFEGUARD TRIGGERED: Execution of '{dangerous}' is blocked for local system safety. Try an alternative approach."
+
     try:
         # Security warning: In a real production system, you wouldn't expose raw shell access.
         # Since this is a local hacker agent, it provides maximum flexibility.
