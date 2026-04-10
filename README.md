@@ -29,7 +29,18 @@ This interactive CLI agent assists security professionals and researchers in dee
 
 ---
 
-## 🛠️ Prerequisites
+## ♿ Accessibility
+
+The agent is designed to be accessible to all users, including those using screen readers or those who require high-contrast plain text.
+
+*   `--accessible`: Disables terminal animations, spinners, Markdown rendering panels, and colored ANSI text. This ensures compatibility with VoiceOver, NVDA, and JAWS.
+*   `--tts`: Enables local Text-to-Speech (TTS). The agent will read its answers aloud, automatically stripping markdown syntax and emojis to ensure clear pronunciation.
+
+```bash
+uv run app.py --accessible --tts
+```
+
+---
 
 1.  **Python 3.12+**
 2.  **uv** (Python package manager, recommended)
