@@ -2,6 +2,7 @@ import socket
 import urllib.request
 import json
 import subprocess
+import os
 from langchain_core.tools import tool
 from rich.prompt import Confirm
 from rich.console import Console
@@ -179,8 +180,12 @@ def run_shell_command(command: str) -> str:
             return f"❌ SAFEGUARD TRIGGERED: Execution of '{dangerous}' is blocked for local system safety. Try an alternative approach."
             
     # User permission request
-    console.print(f"\n[bold yellow]⚠️ Agent wants to run a shell command:[/bold yellow] [cyan]{command}[/cyan]")
-    is_approved = Confirm.ask("[bold red]Do you approve this command?[/bold red]", default=False)
+    if os.environ.get("STREAMLIT") == "1":
+        is_approved = True
+        console.print(f"\n[bold yellow]⚠️ Web Mode: Auto-approving shell command:[/bold yellow] [cyan]{command}[/cyan]")
+    else:
+        console.print(f"\n[bold yellow]⚠️ Agent wants to run a shell command:[/bold yellow] [cyan]{command}[/cyan]")
+        is_approved = Confirm.ask("[bold red]Do you approve this command?[/bold red]", default=False)
     
     if not is_approved:
         return "❌ User denied permission to run this command."

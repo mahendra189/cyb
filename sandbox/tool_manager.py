@@ -1,6 +1,7 @@
 import subprocess
 import shutil
 import platform
+import os
 from langchain_core.tools import tool
 from rich.console import Console
 from rich.prompt import Confirm
@@ -58,9 +59,13 @@ def install_security_tool(tool_name: str) -> str:
         return f"❌ I don't have an automated installation script for '{tool_name}' on {os_type}. Try using run_shell_command to install it manually."
 
     # Interactively ask the user for permission to install
-    console.print(f"\n[bold yellow]📦 Agent wants to install a missing tool:[/bold yellow] [cyan]{tool_name}[/cyan]")
-    console.print(f"[dim]Proposed installation command: {cmd}[/dim]")
-    is_approved = Confirm.ask(f"[bold red]Do you approve the installation of {tool_name}?[/bold red]", default=False)
+    if os.environ.get("STREAMLIT") == "1":
+        is_approved = True
+        console.print(f"\n[bold yellow]📦 Web Mode: Auto-approving installation:[/bold yellow] [cyan]{tool_name}[/cyan]")
+    else:    
+        console.print(f"\n[bold yellow]📦 Agent wants to install a missing tool:[/bold yellow] [cyan]{tool_name}[/cyan]")
+        console.print(f"[dim]Proposed installation command: {cmd}[/dim]")
+        is_approved = Confirm.ask(f"[bold red]Do you approve the installation of {tool_name}?[/bold red]", default=False)
 
     if not is_approved:
         return f"❌ User denied permission to install {tool_name}."
