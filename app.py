@@ -15,6 +15,7 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.checkpoint.memory import MemorySaver
 
 # Import tools from sandbox
 from sandbox.osint_tools import tools
@@ -71,8 +72,11 @@ workflow.add_conditional_edges(
 # After tools run, go back to the agent
 workflow.add_edge("tools", "agent")
 
+# Add memory to the agent
+memory = MemorySaver()
+
 # Compile the graph
-app = workflow.compile()
+app = workflow.compile(checkpointer=memory)
 
 # Initialize Rich Console
 console = Console()
@@ -86,26 +90,36 @@ if __name__ == "__main__":
     console.print(Panel.fit(welcome_message, title="[bold red]💀 CyberSec Hacker Agent (LangGraph + Ollama)[/bold red]", border_style="red"))
     
     while True:
-        user_input = Prompt.ask("\n[bold green]You[/bold green]")
-        if user_input.lower() in ["quit", "exit"]:
-            console.print("[bold red]Exiting OSINT Agent. Goodbye![/bold red]")
-            break
-            
-        inputs = {"messages": [HumanMessage(content=user_input)]}
-        
-        # Stream the output with visual status
-        with console.status("[bold yellow]Agent is thinking...[/bold yellow]", spinner="dots"):
-            for chunk in app.stream(inputs, stream_mode="values"):
-                message = chunk["messages"][-1]
-                if isinstance(message, HumanMessage):
-                    continue
+        try:
+            user_input = Prompt.ask("\n[bold green]You[/bold green]")
+            if user_input.lower() in ["quit", "exit"]:
+                console.print("[bold red]Exiting OSINT Agent. Goodbye![/bold red]")
+                break
                 
-                # Print intermediate tool calls if any
-                if hasattr(message, "tool_calls") and message.tool_calls:
-                    for t in message.tool_calls:
-                        console.print(f"  [bold magenta]🔧 Using tool:[/bold magenta] [yellow]{t['name']}[/yellow]([cyan]{t['args']}[/cyan])")
+            inputs = {"messages": [HumanMessage(content=user_input)]}
+            
+            # The 'thread_id' tracks the conversation context in LangGraph's memory
+            config = {"configurable": {"thread_id": "session-1"}}
+            
+            # Stream the output with visual status
+            with console.status("[bold yellow]Agent is thinking...[/bold yellow]", spinner="dots"):
+                for chunk in app.stream(inputs, config=config, stream_mode="values"):
+                    message = chunk["messages"][-1]
+                    if isinstance(message, HumanMessage):
+                        continue
+                    
+                    # Print intermediate tool calls if any
+                    if hasattr(message, "tool_calls") and message.tool_calls:
+                        for t in message.tool_calls:
+                            console.print(f"  [bold magenta]🔧 Using tool:[/bold magenta] [yellow]{t['name']}[/yellow]([cyan]{t['args']}[/cyan])")
+                            
+                    # Print the final response
+                    elif message.content:
+                        console.print("\n")
+                        console.print(Panel(Markdown(message.content), title="[bold blue]Agent response[/bold blue]", border_style="blue", expand=False))
                         
-                # Print the final response
-                elif message.content:
-                    console.print("\n")
-                    console.print(Panel(Markdown(message.content), title="[bold blue]Agent response[/bold blue]", border_style="blue", expand=False))
+        except KeyboardInterrupt:
+            console.print("\n[bold red]Interrupt received. Stopping current operation or exiting gracefully...[/bold red]")
+            break
+        except Exception as e:
+            console.print(f"\n[bold red]An error occurred:[/bold red] {str(e)}")
