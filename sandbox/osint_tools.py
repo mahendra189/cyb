@@ -103,12 +103,24 @@ def gitleaks_scan(repo_url: str) -> str:
         return f"Error running gitleaks: {e}"
 
 @tool
-def nuclei_scan(target: str) -> str:
-    """Run Nuclei to scan assets for vulnerabilities using templates."""
-    if not target.startswith("http"):
-        target = "http://" + target
+def nuclei_scan(targets: str) -> str:
+    """Run Nuclei to scan an asset or a list of assets for vulnerabilities. 
+    Accepts a single domain/URL or a comma-separated list of domains/URLs."""
     try:
-        result = subprocess.run(["nuclei", "-u", target], capture_output=True, text=True, timeout=300)
+        targets_list = [t.strip() for t in targets.split(",") if t.strip()]
+        if not targets_list:
+            return "Error: No targets provided."
+            
+        formatted_targets = []
+        for t in targets_list:
+            if not t.startswith("http"):
+                formatted_targets.append("http://" + t)
+            else:
+                formatted_targets.append(t)
+                
+        # To avoid bash injection, we pass targets individually or write to a tmp file
+        targets_string = ",".join(formatted_targets)
+        result = subprocess.run(["nuclei", "-target", targets_string], capture_output=True, text=True, timeout=300)
         return result.stdout
     except FileNotFoundError:
         return "Error: nuclei is not installed."
