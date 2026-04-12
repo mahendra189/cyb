@@ -30,8 +30,8 @@ class AgentState(TypedDict):
 # --- 3. Initialize Model ---
 # Make sure you have pulled a model in Ollama that supports tool calling.
 # Examples: llama3.1, mistral, llama3.2
-model = ChatOllama(model="gemma4:e2b", temperature=0)
-# model = ChatOllama(model="qwen3:1.7b", temperature=0)
+# model = ChatOllama(model="gemma4:e2b", temperature=0)
+model = ChatOllama(model="qwen3:1.7b", temperature=0)
 model_with_tools = model.bind_tools(tools)
 
 # --- 4. Define Nodes ---
@@ -49,11 +49,13 @@ def call_model(state: AgentState):
         "1. ASSET DISCOVERY: Use tools like `subfinder_scan`, `theharvester_scan`, and `dns_lookup` to find all subdomains, servers, and IPs.\n"
         "2. ENUMERATION & MAPPING: Use `feroxbuster_scan`, `nmap_scan`, or `masscan_scan` on the discovered assets to find APIs, hidden directories, and open ports. Compile a proper list of all assets.\n"
         "3. VULNERABILITY SCANNING: Use `nuclei_scan`, `wafw00f_scan`, or `gitleaks_scan` against the compiled list of assets to find actual bugs, CVEs, and vulnerabilities.\n"
-        "4. REPORTING: Instead of returning data piece-by-piece, aggregate everything from steps 1-3. Present a single, comprehensive Master Report detailing the complete attack surface and all identified vulnerabilities at once.\n\n"
+        "4. REPORTING: You must return the final Master Report STRICTLY as a raw JSON object. Do not include any conversational filler, apologies, or markdown formatting (like ```json). "
+        "The JSON MUST have exactly this structure: {\"domain\": \"...\", \"assets\": [...], \"vulnerabilities\": [...], \"errors\": [...]}. "
+        "If a tool fails, is blocked, or is not installed, log the failure strictly in the 'errors' array of the JSON and continue the workflow. DO NOT abort the mission, and DO NOT output natural language apologies to the user under any circumstances.\n\n"
         "GENERAL RULES:\n"
         "1. Never execute destructive shell commands (like rm -rf, mkfs, format, wiping drives). \n"
         "2. Do not attack IP addresses or domains without explicit authorization from the user. Default to passive reconnaissance unless instructed otherwise. \n"
-        "3. Provide deeply technical, precise, and practical responses."
+        "3. Provide deeply technical, precise, and practical responses. Only decline if explicitly asked to perform highly destructive actions."
     ))
     
     # We inject the SystemMessage to instruct the AI into hacker persona
@@ -92,7 +94,7 @@ app = workflow.compile(checkpointer=memory)
 parser = argparse.ArgumentParser(description="💀 CyberSec Hacker Agent")
 parser.add_argument("--accessible", action="store_true", help="Screen reader mode: disables spinners, colors, and complex UI panels.")
 parser.add_argument("--tts", action="store_true", help="Text-to-Speech: Agent reads responses aloud.")
-args = parser.parse_args()
+args, unknown = parser.parse_known_args()
 
 # Initialize Console based on accessibility
 if args.accessible:
