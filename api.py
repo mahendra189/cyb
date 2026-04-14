@@ -32,6 +32,7 @@ class PromptResponse(BaseModel):
 
 class ScanRequest(BaseModel):
     domain: str
+    mode: str = "fast"  # fast | medium | deep
 
 @api.get("/")
 def health_check():
@@ -90,47 +91,86 @@ def scan_domain_pipeline(request: ScanRequest):
     # 1. Execute the Pipeline
     # Standard output redirection (2>/dev/null) is used to avoid hanging on missing tools. 
     bash_script = f"""#!/bin/bash
-domain="{domain}"
-echo "[+] Starting Recon on $domain"
+DOMAIN="{domain}"
+MODE="{request.mode}"
 
-# 1. Subdomain Enumeration
-echo "[+] Enumerating subdomains..."
-subfinder -d $domain -silent > subs_{domain}.txt 2>/dev/null || true
-amass enum -passive -d $domain >> subs_{domain}.txt 2>/dev/null || true
-theHarvester -d $domain -b all | grep -oE "[a-zA-Z0-9._-]+\\.$domain" >> subs_{domain}.txt 2>/dev/null || true
+OUT="data/recon-$DOMAIN"
+mkdir -p $OUT
+cd $OUT || exit
 
-# 2. Deduplicate
-sort -u subs_{domain}.txt > final_subs_{domain}.txt 2>/dev/null || true
+echo "[+] Target: $DOMAIN"
+echo "[+] Mode: $MODE"
 
-# 3. Resolve Live Domains
-echo "[+] Probing live domains..."
-httpx -l final_subs_{domain}.txt -silent -ip -status-code -title -tech-detect > live_hosts_{domain}.txt 2>/dev/null || true
+# -----------------------------
+# FAST MODE (≤ 2 min)
+# -----------------------------
+if [ "$MODE" == "fast" ]; then
+    echo "[FAST] Running quick recon..."
+    subfinder -d $DOMAIN -silent > subs.txt 2>/dev/null || true
+    assetfinder --subs-only $DOMAIN >> subs.txt 2>/dev/null || true
+    sort -u subs.txt > final_subs.txt 2>/dev/null || true
+    dnsx -l final_subs.txt -silent -o live.txt 2>/dev/null || true
+    httpx -l live.txt -silent -o live_hosts.txt 2>/dev/null || true
+    echo "[FAST] Done. Output: live_hosts.txt"
+fi
 
-# Extract IPs for scanning
-cat live_hosts_{domain}.txt | awk '{{print $1}}' | sed 's|https\?://||' > hosts_{domain}.txt 2>/dev/null || true
+# -----------------------------
+# MEDIUM MODE (≤ 5 min)
+# -----------------------------
+if [ "$MODE" == "medium" ]; then
+    echo "[MEDIUM] Running balanced recon..."
+    subfinder -d $DOMAIN -silent > subs.txt 2>/dev/null || true
+    assetfinder --subs-only $DOMAIN >> subs.txt 2>/dev/null || true
+    # amass removed to prevent huge bottleneck in automated API, fallback to basic fast tools
+    sort -u subs.txt > final_subs.txt 2>/dev/null || true
+    dnsx -l final_subs.txt -silent -o live.txt 2>/dev/null || true
+    httpx -l live.txt -silent -o live_hosts.txt 2>/dev/null || true
+    echo "[+] Port scanning..."
+    naabu -l live.txt -silent -top-ports 100 -o ports.txt 2>/dev/null || true
+    echo "[MEDIUM] Done. Outputs: live_hosts.txt, ports.txt"
+fi
 
-# 4. Port Scanning
-echo "[+] Running Nmap..."
-nmap -iL hosts_{domain}.txt -T4 -Pn -oN nmap_scan_{domain}.txt 2>/dev/null || true
+# -----------------------------
+# DEEP MODE (5+ min)
+# -----------------------------
+if [ "$MODE" == "deep" ]; then
+    echo "[DEEP] Running full recon..."
+    subfinder -d $DOMAIN -silent > subs.txt 2>/dev/null || true
+    assetfinder --subs-only $DOMAIN >> subs.txt 2>/dev/null || true
+    sort -u subs.txt > final_subs.txt 2>/dev/null || true
+    dnsx -l final_subs.txt -silent -o live.txt 2>/dev/null || true
+    httpx -l live.txt -silent -o live_hosts.txt 2>/dev/null || true
+    echo "[+] Full port scan..."
+    naabu -l live.txt -silent -o ports.txt 2>/dev/null || true
+    echo "[+] Service detection..."
+    cut -d: -f1 ports.txt | sort -u > hosts.txt 2>/dev/null || true
+    nmap -sV -iL hosts.txt -oN nmap.txt 2>/dev/null || true
+    echo "[+] URL collection..."
+    timeout 60 gau $DOMAIN > gau.txt 2>/dev/null || true
+    timeout 60 waybackurls $DOMAIN > wayback.txt 2>/dev/null || true
+    cat gau.txt wayback.txt | sort -u > urls.txt 2>/dev/null || true
+    echo "[+] Extracting sensitive endpoints..."
+    grep -E "api|admin|login|\\.json|\\.php|\\.aspx|\\.jsp" urls.txt > interesting.txt 2>/dev/null || true
+    echo "[DEEP] Done. Full recon completed."
+fi
 
-# 5. URL Collection
-echo "[+] Gathering URLs..."
-gau $domain > urls_{domain}.txt 2>/dev/null || true
-
-# 6. Final Cleanup
-sort -u urls_{domain}.txt > final_urls_{domain}.txt 2>/dev/null || true
-
-echo "[+] Recon Completed 🚀"
+# -----------------------------
+# DONE
+# -----------------------------
+echo "[+] Recon Completed!"
+echo "Results saved in: $OUT"
 
 echo "--- RAW OUTPUT START ---"
 echo "[SUBDOMAINS]"
-cat final_subs_{domain}.txt 2>/dev/null || echo "No subdomains found or tools failed."
+cat final_subs.txt 2>/dev/null || echo "No subdomains found."
 echo "[LIVE HOSTS & TECH]"
-cat live_hosts_{domain}.txt 2>/dev/null || echo "No live hosts found."
-echo "[NMAP PORTS]"
-cat nmap_scan_{domain}.txt 2>/dev/null || echo "Nmap failed or found no open ports."
+cat live_hosts.txt 2>/dev/null || echo "No live hosts found."
+echo "[PORTS]"
+cat ports.txt 2>/dev/null || echo "No ports found."
+echo "[NMAP SERVICES]"
+cat nmap.txt 2>/dev/null || echo "Nmap failed or found no open services."
 echo "[DISCOVERED URLS]"
-head -n 25 final_urls_{domain}.txt 2>/dev/null || echo "No URLs found."
+head -n 25 interesting.txt 2>/dev/null || echo "No URLs found."
 echo "--- RAW OUTPUT END ---"
     """
     
@@ -156,53 +196,76 @@ echo "--- RAW OUTPUT END ---"
         print(f"\n[❌] Pipeline execution failed: {e}")
         raw_recon_data += f"\nPipeline execution failed: {e}"
         
-    # 2. Transform the Data using LLM formatted strictly to the requested schemas
-    llm = ChatOllama(model="llama3.2", temperature=0, format="json")
-    
-    system_prompt = SystemMessage(content=(
-        "You are an expert security parser. You consume raw terminal output from penetration testing tools "
-        "like subfinder, httpx, nmap, and gau, and map the findings into strict JSON object definitions.\n"
-        "The user expects EXACTLY one root JSON object containing the following 5 arrays:\n\n"
-        "1. `targets`: An array containing target metadata conforming to the Monitoring schema.\n"
-        "2. `assets`: An array mapping subdomains, IP addresses, vulnerabilities, and OS properties.\n"
-        "3. `services`: An array mapping detected software versions and web server types.\n"
-        "4. `ports`: An array grouping exposed ports and the assets hosting them.\n"
-        "5. `topology`: An object containing `nodes` and `edges` referencing the previously defined asset IDs, "
-        "allowing a graph engine to render the attack surface.\n\n"
-        "You must output ONLY valid, parsable JSON. No conversational text, no Markdown wrappers, no apologies if tools failed. "
-        "If data is missing from the scan output, fabricate realistic placeholder correlations using proper formatting, "
-        "ensuring the strict datatype structures are completely adhered to and nothing is broken."
-    ))
-    
-    human_prompt = HumanMessage(content=f"Domain Scanned: {domain}\n\nRAW TERMINAL OUTPUT:\n{raw_recon_data}")
+    # 2. Parse raw output into structured format
+    print("\n[🔍] Parsing raw recon output into structured format...")
     
     try:
-        print("\n[🧠] Parsing raw recon pipeline output through LangChain/Ollama into structured JSON schemas...")
-        response = llm.invoke([system_prompt, human_prompt])
+        # Extract subdomains from raw output
+        subdomains = []
+        ports_dict = {}
         
-        # Clean the response content just in case the model wraps it in markdown blocks
-        content = response.content.strip()
-        if content.startswith("```json"):
-            content = content[7:]
-        elif content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
+        # Parse the raw output to extract sections
+        lines = raw_recon_data.split('\n')
+        current_section = None
+        
+        for line in lines:
+            line = line.strip()
             
-        content = content.strip()
+            if "[SUBDOMAINS]" in line:
+                current_section = "subdomains"
+                continue
+            elif "[LIVE HOSTS" in line or "[PORTS]" in line or "[NMAP" in line or "[DISCOVERED" in line:
+                current_section = None
+                continue
+                
+            if current_section == "subdomains" and line and not line.startswith("["):
+                if line != "No subdomains found.":
+                    subdomains.append(line)
         
-        # Attempt to parse into python dict to validate it's correct JSON
-        parsed_json = json.loads(content)
-        print("[✅] Successfully parsed JSON from LLM.")
-        return parsed_json
-    except json.JSONDecodeError as decode_error:
-        print(f"\n[❌] JSON Parse Error: {decode_error}")
-        print(f"--- RAW LLM RESPONSE ---\n{response.content}\n------------------------")
-        return {
-            "error": "The LLM failed to return a structurally valid JSON payload.",
-            "details": str(decode_error),
-            "raw_output": response.content
+        # Parse ports if available - ports output format is typically: host:port
+        ports_section_start = raw_recon_data.find("[PORTS]")
+        if ports_section_start != -1:
+            ports_section = raw_recon_data[ports_section_start:].split('\n')[1:]
+            for line in ports_section:
+                line = line.strip()
+                if not line or line.startswith("[") or "found" in line.lower():
+                    continue
+                
+                # Expected format: subdomain:port or ip:port
+                if ':' in line:
+                    parts = line.rsplit(':', 1)
+                    if len(parts) == 2:
+                        host, port = parts
+                        host = host.strip()
+                        try:
+                            port_num = int(port.strip())
+                            if host not in ports_dict:
+                                ports_dict[host] = []
+                            if port_num not in ports_dict[host]:
+                                ports_dict[host].append(port_num)
+                        except ValueError:
+                            pass
+        
+        # Build assets array
+        assets = []
+        for subdomain in subdomains:
+            asset = {
+                "subdomain": subdomain,
+                "ports": ports_dict.get(subdomain, [])
+            }
+            assets.append(asset)
+        
+        result = {
+            "domain": domain,
+            "mode": request.mode,
+            "assets": assets,
+            "total_subdomains": len(subdomains),
+            "total_assets": len(assets)
         }
+        
+        print(f"[✅] Successfully parsed {len(assets)} assets with {len(ports_dict)} hosts with ports.")
+        return result
+        
     except Exception as e:
-        print(f"\n[❌] LLM Execution Error: {e}")
-        raise HTTPException(status_code=500, detail=f"LLM processing failed: {str(e)}")
+        print(f"\n[❌] Parsing Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse recon output: {str(e)}")
