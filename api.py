@@ -279,9 +279,11 @@ echo "--- RAW OUTPUT END ---"
 @api.post("/api/testssl")
 def run_testssl(request: TestSSLRequest):
     """
-    Runs testssl.sh on the specified host and returns SSL/TLS certificate
-    and vulnerability analysis in structured JSON format.
+    Runs testssl.sh and returns the output.json JSON response.
     """
+    import tempfile
+    import os
+    
     host = request.host.strip()
     port = request.port
     
@@ -289,202 +291,60 @@ def run_testssl(request: TestSSLRequest):
         raise HTTPException(status_code=400, detail="Host cannot be empty.")
     
     try:
-        print(f"\n[🔐] Running testssl.sh on {host}:{port}...")
+        print(f"\n[🔐] testssl.sh: {host}:{port}")
         
-        # Run testssl.sh with JSON output
-        cmd = [
-            "testssl.sh",
-            "--json",
-            "--severity", "HIGH",
-            "--no-counseling",
-            f"{host}:{port}"
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        
-        if result.returncode != 0 and not result.stdout:
-            raise HTTPException(
-                status_code=500,
-                detail=f"testssl.sh failed: {result.stderr or 'Unknown error'}"
+        # Create temp directory
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Run testssl
+            cmd = [
+                "testssl.sh",
+                "--quiet",
+                "--warnings", "off",
+                "--jsonfile", "output.json",
+                f"{host}:{port}"
+            ]
+            
+            result = subprocess.run(
+                cmd, 
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=300, 
+                cwd=tmpdir
             )
+            
+            # Read output.json
+            json_file_path = os.path.join(tmpdir, "output.json")
+            
+            if not os.path.exists(json_file_path):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"testssl.sh did not generate output.json"
+                )
+            
+            with open(json_file_path, 'r') as f:
+                output_data = json.load(f)
+            
+            print(f"[✅] Done")
+            return output_data
         
-        # Parse testssl JSON output
-        testssl_data = json.loads(result.stdout) if result.stdout else {}
-        
-        # Extract and transform data into the required format
-        parsed_result = _parse_testssl_output(testssl_data, host, port)
-        
-        print(f"[✅] Successfully completed testssl scan for {host}:{port}")
-        return parsed_result
-        
-    except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to parse testssl JSON output: {str(e)}"
-        )
     except subprocess.TimeoutExpired:
+        print(f"[!] Timeout")
         raise HTTPException(
             status_code=504,
-            detail="testssl.sh execution timed out (>120 seconds)"
+            detail="testssl.sh timed out"
         )
     except FileNotFoundError:
+        print(f"[!] testssl.sh not found")
         raise HTTPException(
             status_code=500,
-            detail="testssl.sh not found. Please install testssl.sh: https://github.com/drwetter/testssl.sh"
+            detail="testssl.sh not found"
+        )
+    except json.JSONDecodeError as e:
+        print(f"[!] JSON error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to parse JSON: {str(e)}"
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error running testssl: {str(e)}")
-
-
-def _parse_testssl_output(testssl_data: dict, host: str, port: int) -> dict:
-    """
-    Parses testssl.sh JSON output and transforms it into the required format.
-    """
-    
-    # Initialize result structure
-    result = {
-        "overallGrade": "N/A",
-        "finalScore": 0,
-        "metrics": {
-            "Protocol Support": 0,
-            "Key Exchange": 0,
-            "Cipher Strength": 0
-        },
-        "protocols": [],
-        "vulnerabilities": [],
-        "certificate": {
-            "commonName": "N/A",
-            "issuer": "N/A",
-            "notBefore": "N/A",
-            "notAfter": "N/A",
-            "keySize": "N/A",
-            "signatureAlgorithm": "N/A",
-            "subjectAltNames": []
-        }
-    }
-    
-    try:
-        # Extract summary information
-        if "summaries" in testssl_data and testssl_data["summaries"]:
-            summary = testssl_data["summaries"][0]
-            result["overallGrade"] = summary.get("grade", "N/A")
-            
-            # Extract score from grade (rough conversion)
-            grade_scores = {
-                "A+": 100, "A": 95, "A-": 90,
-                "B+": 85, "B": 80, "B-": 75,
-                "C+": 70, "C": 65, "C-": 60,
-                "D+": 55, "D": 50, "D-": 45,
-                "E": 40, "F": 20, "T": 0
-            }
-            result["finalScore"] = grade_scores.get(summary.get("grade", "N/A"), 50)
-        
-        # Parse protocol support
-        if "scanResult" in testssl_data:
-            for result_item in testssl_data["scanResult"]:
-                # Extract TLS/SSL protocols
-                if "protocol" in result_item.get("id", ""):
-                    protocol_name = result_item.get("id", "").replace("TLSv", "TLS ").replace("SSLv", "SSL ")
-                    status = result_item.get("finding", "").upper()
-                    
-                    if "offered" in status or "enabled" in status.lower() or result_item.get("severity", "").lower() == "info":
-                        result["protocols"].append({
-                            "name": protocol_name,
-                            "offered": True,
-                            "status": "OK" if "accepted" in status.lower() else status
-                        })
-                    elif "deprecated" in status.lower() or "weak" in status.lower():
-                        result["protocols"].append({
-                            "name": protocol_name,
-                            "offered": True,
-                            "status": "DEPRECATED" if "deprecated" in status.lower() else status
-                        })
-                
-                # Extract vulnerabilities
-                vuln_keywords = ["heartbleed", "ccs", "lucky13", "crime", "breach", "sweet32", "logjam", "drown", "poodle"]
-                test_id_lower = result_item.get("id", "").lower()
-                
-                for keyword in vuln_keywords:
-                    if keyword in test_id_lower:
-                        severity = result_item.get("severity", "").lower()
-                        is_vulnerable = severity in ["high", "critical", "medium"] or "vulnerable" in result_item.get("finding", "").lower()
-                        
-                        result["vulnerabilities"].append({
-                            "id": keyword.upper(),
-                            "vulnerable": is_vulnerable,
-                            "cve": _get_cve_for_vuln(keyword)
-                        })
-                        break
-                
-                # Extract certificate information
-                if "cert" in result_item.get("id", "").lower():
-                    cert_info = result_item.get("finding", "")
-                    if "CN=" in cert_info:
-                        # Parse certificate details from finding string
-                        cn_match = re.search(r"CN=([^,/\s]*)", cert_info)
-                        if cn_match:
-                            result["certificate"]["commonName"] = cn_match.group(1)
-                    
-                    if "issuer" in result_item.get("id", "").lower():
-                        result["certificate"]["issuer"] = cert_info[:50] if cert_info else "N/A"
-        
-        # Extract certificate details from certChain if available
-        if "certChain" in testssl_data and testssl_data["certChain"]:
-            for cert in testssl_data["certChain"]:
-                if "CN" in cert.get("subject", ""):
-                    cn_match = re.search(r"CN=([^,/\s]*)", cert.get("subject", ""))
-                    if cn_match:
-                        result["certificate"]["commonName"] = cn_match.group(1)
-                
-                if "O" in cert.get("issuer", ""):
-                    result["certificate"]["issuer"] = cert.get("issuer", "N/A")
-                
-                if "notBefore" in cert:
-                    result["certificate"]["notBefore"] = str(cert["notBefore"])[:10]
-                
-                if "notAfter" in cert:
-                    result["certificate"]["notAfter"] = str(cert["notAfter"])[:10]
-                
-                if "keySize" in cert:
-                    result["certificate"]["keySize"] = f"{cert.get('keyType', 'RSA')} {cert['keySize']}"
-                
-                if "signatureAlgorithm" in cert:
-                    result["certificate"]["signatureAlgorithm"] = cert["signatureAlgorithm"]
-                
-                if "subjectAltName" in cert:
-                    result["certificate"]["subjectAltNames"] = cert["subjectAltName"]
-        
-        # Calculate metrics based on available protocols and vulnerabilities
-        protocol_count = len(result["protocols"])
-        if protocol_count > 0:
-            result["metrics"]["Protocol Support"] = min(100, 50 + (protocol_count * 10))
-        
-        vuln_count = sum(1 for v in result["vulnerabilities"] if v["vulnerable"])
-        if len(result["vulnerabilities"]) > 0:
-            result["metrics"]["Key Exchange"] = max(0, 100 - (vuln_count * 15))
-        
-        result["metrics"]["Cipher Strength"] = result["finalScore"]
-        
-    except Exception as e:
-        print(f"[⚠️] Error parsing testssl output: {e}")
-        # Return partially filled result if parsing fails
-    
-    return result
-
-
-def _get_cve_for_vuln(vuln_name: str) -> str:
-    """
-    Returns the CVE ID for known vulnerabilities.
-    """
-    cve_map = {
-        "heartbleed": "CVE-2014-0160",
-        "ccs": "CVE-2014-0224",
-        "lucky13": "CVE-2013-0169",
-        "crime": "CVE-2012-4929",
-        "breach": "CVE-2013-3566",
-        "sweet32": "CVE-2016-2183",
-        "logjam": "CVE-2015-4000",
-        "drown": "CVE-2016-0800",
-        "poodle": "CVE-2014-3566"
-    }
-    return cve_map.get(vuln_name.lower(), "N/A")
+        print(f"[!] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
