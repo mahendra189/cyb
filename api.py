@@ -3,7 +3,7 @@ import uuid
 import subprocess
 import json
 import re
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # Set environment variable before importing tools to bypass CLI interactive prompts
 os.environ["STREAMLIT"] = "1"
@@ -38,6 +38,19 @@ class ScanRequest(BaseModel):
 class TestSSLRequest(BaseModel):
     host: str  # domain or IP address
     port: int = 443  # default HTTPS port
+
+class ChatRequest(BaseModel):
+    prompt: str
+    target_id: Optional[str] = None  # optional target ID
+    context: Optional[Dict[str, Any]] = None  # optional context (assets, ports, services)
+    model: str = "qwen3:1.7b"  # default Ollama model
+
+class ChatResponse(BaseModel):
+    response: str
+    model: str
+    prompt: str
+    target_id: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None
 
 @api.get("/")
 def health_check():
@@ -348,3 +361,57 @@ def run_testssl(request: TestSSLRequest):
     except Exception as e:
         print(f"[!] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@api.post("/api/ollama/chat", response_model=ChatResponse)
+def ollama_chat(request: ChatRequest):
+    """
+    Chat endpoint that sends a prompt to Ollama and returns the response.
+    Can include target context (assets, ports, services) for better analysis.
+    """
+    prompt = request.prompt.strip()
+    model = request.model
+    target_id = request.target_id
+    context = request.context
+    
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+    
+    try:
+        print(f"\n[💬] Ollama Chat Request")
+        print(f"[+] Model: {model}")
+        if target_id:
+            print(f"[+] Target ID: {target_id}")
+        if context:
+            print(f"[+] Context: {type(context).__name__} provided")
+        print(f"[+] Prompt: {prompt[:80]}...")
+        
+        # Build full prompt with context if provided
+        full_prompt = prompt
+        if context:
+            context_str = json.dumps(context, indent=2)
+            full_prompt = f"{prompt}\n\nContext Data:\n{context_str}"
+        
+        # Initialize Ollama chat
+        chat = ChatOllama(model=model, temperature=0)
+        
+        # Send prompt and get response
+        print(f"[⏳] Getting response from Ollama...")
+        response = chat.invoke([HumanMessage(content=full_prompt)])
+        
+        # Extract response text
+        response_text = response.content if hasattr(response, 'content') else str(response)
+        
+        print(f"[✅] Response received ({len(response_text)} chars)")
+        
+        return ChatResponse(
+            response=response_text,
+            model=model,
+            prompt=prompt,
+            target_id=target_id,
+            context=context
+        )
+        
+    except Exception as e:
+        print(f"[!] Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error communicating with Ollama: {str(e)}")
