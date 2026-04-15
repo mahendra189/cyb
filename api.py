@@ -52,6 +52,9 @@ class ChatResponse(BaseModel):
     target_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
 
+class GetIPRequest(BaseModel):
+    host: str
+
 @api.get("/")
 def health_check():
     return {"status": "ok", "message": "CyberSec Hacker Agent API is running."}
@@ -415,3 +418,48 @@ def ollama_chat(request: ChatRequest):
     except Exception as e:
         print(f"[!] Error: {e}")
         raise HTTPException(status_code=500, detail=f"Error communicating with Ollama: {str(e)}")
+
+
+
+
+@api.post("/api/get_ip")
+def get_ip(request: GetIPRequest):
+    """
+    Resolve domain to IP using dig and return first IP.
+    """
+    
+    host = request.host.strip()
+    
+    if not host:
+        raise HTTPException(status_code=400, detail="Host cannot be empty.")
+    
+    try:
+        result = subprocess.run(
+            ["dig", "+short", host],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="dig command failed")
+        
+        # Get first IP from output
+        ips = result.stdout.strip().splitlines()
+        
+        if not ips:
+            raise HTTPException(status_code=404, detail="No IP found")
+        
+        return {
+            "host": host,
+            "ip": ips[0]
+        }
+    
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="dig timed out")
+    
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="dig not installed")
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
