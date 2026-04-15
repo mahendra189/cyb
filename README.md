@@ -1,4 +1,4 @@
-# 💀 CyberSec Hacker Agent
+# 💀 QSHIELDX Hacker Agent
 
 **An autonomous, elite white-hat cyber security expert and hacker AI powered by LangGraph and Ollama.**
 
