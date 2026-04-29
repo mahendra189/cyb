@@ -7,9 +7,9 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from app import app as langgraph_agent
 from sandbox.osint_tools import tools
 
-st.set_page_config(page_title="CyberSec Hacker Agent", page_icon="💀", layout="wide")
+st.set_page_config(page_title="CyberSafe Agent", page_icon="💀", layout="wide")
 
-st.title("💀 CyberSec OSINT Hacker Agent")
+st.title("☣️ CyberSafe Agent")
 st.markdown("An autonomous AI agent with access to dozens of security tools.")
 
 with st.sidebar:

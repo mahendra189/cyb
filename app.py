@@ -31,7 +31,7 @@ class AgentState(TypedDict):
 # Make sure you have pulled a model in Ollama that supports tool calling.
 # Examples: llama3.1, mistral, llama3.2
 # model = ChatOllama(model="gemma4:e2b", temperature=0)
-model = ChatOllama(model="qwen3:1.7b", temperature=0)
+model = ChatOllama(model="qwen3.5:0.8b", temperature=0)
 model_with_tools = model.bind_tools(tools)
 
 # --- 4. Define Nodes ---
