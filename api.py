@@ -1,4 +1,214 @@
 import os
+import socket
+import netifaces
+import ipaddress
+from ping3 import ping
+from concurrent.futures import ThreadPoolExecutor
+from fastapi.middleware.cors import CORSMiddleware
+
+from fastapi import FastAPI, HTTPException
+
+# Initialize FastAPI
+api = FastAPI(
+    title="💀 CyberSec Hacker Agent API",
+    description="Backend API exposing the autonomous LangGraph security agent.",
+    version="1.0.0"
+)
+
+# Enable CORS for all origins (optional, but matches your example)
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Local Network Scan Endpoint ---
+@api.get("/scan")
+def scan_network():
+    """
+    Robust local network scanner.
+    Automatically:
+    - Detects subnet
+    - Scans active hosts
+    - Resolves hostname
+    - Extracts MAC addresses
+    """
+
+    import platform
+    import time
+    import re
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+
+    def get_local_network():
+        """
+        Get active interface + subnet automatically
+        """
+
+        gateways = netifaces.gateways()
+
+        if "default" not in gateways:
+            raise Exception("No default gateway found")
+
+        default_gateway = gateways["default"][netifaces.AF_INET][1]
+
+        iface_data = netifaces.ifaddresses(default_gateway)
+
+        if netifaces.AF_INET not in iface_data:
+            raise Exception("No IPv4 interface found")
+
+        iface = iface_data[netifaces.AF_INET][0]
+
+        ip = iface["addr"]
+        netmask = iface["netmask"]
+
+        network = ipaddress.IPv4Network(
+            f"{ip}/{netmask}",
+            strict=False
+        )
+
+        return {
+            "interface": default_gateway,
+            "ip": ip,
+            "netmask": netmask,
+            "network": network
+        }
+
+    def ping_host(ip):
+        """
+        Cross-platform ping
+        """
+
+        system = platform.system().lower()
+
+        if system == "windows":
+            cmd = ["ping", "-n", "1", "-w", "500", str(ip)]
+        else:
+            cmd = ["ping", "-c", "1", "-W", "1", str(ip)]
+
+        try:
+            start = time.time()
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2
+            )
+
+            latency = round((time.time() - start) * 1000, 2)
+
+            return result.returncode == 0, latency
+
+        except Exception:
+            return False, None
+
+    def get_hostname(ip):
+        try:
+            return socket.gethostbyaddr(str(ip))[0]
+        except Exception:
+            return None
+
+    def get_mac(ip):
+        """
+        Read MAC from ARP table
+        """
+
+        try:
+
+            if platform.system().lower() == "windows":
+                output = subprocess.check_output(
+                    ["arp", "-a", str(ip)]
+                ).decode()
+
+            else:
+                output = subprocess.check_output(
+                    ["arp", "-n", str(ip)]
+                ).decode()
+
+            mac_regex = r"([0-9a-fA-F]{2}[:-]){5}([0-9a-fA-F]{2})"
+
+            match = re.search(mac_regex, output)
+
+            if match:
+                return match.group(0)
+
+        except Exception:
+            pass
+
+        return None
+
+    def scan_ip(ip):
+
+        ip = str(ip)
+
+        alive, latency = ping_host(ip)
+
+        if not alive:
+            return None
+
+        return {
+            "ip": ip,
+            "hostname": get_hostname(ip),
+            "mac": get_mac(ip),
+            "latency_ms": latency,
+            "alive": True
+        }
+
+    try:
+
+        start_time = time.time()
+
+        network_info = get_local_network()
+
+        network = network_info["network"]
+
+        devices = []
+
+        # Prime ARP table for better MAC detection
+        subprocess.run(
+            ["ping", "-c", "1", str(network.network_address + 1)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        # Multi-threaded scanning
+        with ThreadPoolExecutor(max_workers=150) as executor:
+
+            results = executor.map(
+                scan_ip,
+                network.hosts()
+            )
+
+            for result in results:
+                if result:
+                    devices.append(result)
+
+        scan_time = round(time.time() - start_time, 2)
+
+        return {
+            "success": True,
+            "interface": network_info["interface"],
+            "local_ip": network_info["ip"],
+            "subnet_mask": network_info["netmask"],
+            "network": str(network),
+            "total_devices": len(devices),
+            "scan_time_seconds": scan_time,
+            "devices": devices
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+
+
+
 import uuid
 import subprocess
 import json
@@ -13,15 +223,9 @@ from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_ollama import ChatOllama
 
+
 # Import your LangGraph compiled agent
 from app import app as langgraph_agent
-
-# Initialize FastAPI
-api = FastAPI(
-    title="💀 CyberSec Hacker Agent API",
-    description="Backend API exposing the autonomous LangGraph security agent.",
-    version="1.0.0"
-)
 
 class PromptRequest(BaseModel):
     prompt: str
