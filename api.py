@@ -145,18 +145,99 @@ def scan_network():
         ip = str(ip)
 
         alive, latency = ping_host(ip)
-
         if not alive:
             return None
+        hostname = get_hostname(ip)
+        mac = get_mac(ip)
+        fingerprint = fingerprint_device(ip)
 
         return {
             "ip": ip,
-            "hostname": get_hostname(ip),
-            "mac": get_mac(ip),
+            "hostname": hostname,
+            "mac": mac,
             "latency_ms": latency,
-            "alive": True
+            "alive": True,
+            # Added info
+            "os_guess": fingerprint["os_guess"],
+            "device_type": fingerprint["device_type"],
+            "open_ports": fingerprint["open_ports"]
         }
 
+    
+
+
+    def fingerprint_device(ip):
+        """
+        Lightweight device fingerprinting
+        """
+
+        common_ports = {
+            22: "ssh",
+            80: "http",
+            443: "https",
+            445: "smb",
+            3389: "rdp",
+            8080: "http-alt",
+            62078: "iphone-sync",
+            8009: "ajp13",
+        }
+
+        open_ports = []
+
+        for port in common_ports.keys():
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.3)
+
+            try:
+                result = sock.connect_ex((str(ip), port))
+
+                if result == 0:
+                    open_ports.append({
+                        "port": port,
+                        "service": common_ports[port]
+                    })
+
+            except Exception:
+                pass
+
+            finally:
+                sock.close()
+
+        # OS Guess
+        os_guess = "Unknown"
+
+        ports = [p["port"] for p in open_ports]
+
+        if 3389 in ports:
+            os_guess = "Windows"
+
+        elif 62078 in ports:
+            os_guess = "iOS/macOS"
+
+        elif 22 in ports:
+            os_guess = "Linux/Unix"
+
+        # Device Type Guess
+        device_type = "Unknown"
+
+        if 80 in ports or 443 in ports:
+            device_type = "Web Server / Router"
+
+        elif 445 in ports:
+            device_type = "Windows Device"
+
+        elif 62078 in ports:
+            device_type = "Apple Device"
+
+        elif 22 in ports:
+            device_type = "Linux Device"
+
+        return {
+            "os_guess": os_guess,
+            "device_type": device_type,
+            "open_ports": open_ports
+        }
     try:
 
         start_time = time.time()
@@ -204,6 +285,7 @@ def scan_network():
             status_code=500,
             detail=str(e)
         )
+    
 
 
 
