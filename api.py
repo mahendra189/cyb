@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi.middleware.cors import CORSMiddleware
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 # Initialize FastAPI
 api = FastAPI(
@@ -287,6 +288,126 @@ def scan_network():
         )
     
 
+
+class ScanPortsRequest(BaseModel):
+    ip: str
+
+@api.post("/scan_ports")
+async def scan_ports(request: ScanPortsRequest):
+    """
+    Scan open ports on a specific IP address.
+    
+    Expected request body:
+    {
+        "ip": "target.ip"
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "ip": "target.ip",
+        "open_ports": [
+            {"port": 22, "service": "ssh"},
+            {"port": 80, "service": "http"},
+            ...
+        ]
+    }
+    """
+    try:
+        target_ip = request.ip.strip()
+        
+        if not target_ip:
+            raise HTTPException(
+                status_code=400,
+                detail="IP address cannot be empty"
+            )
+        
+        # Validate IP format
+        try:
+            ipaddress.ip_address(target_ip)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid IP address format: {target_ip}"
+            )
+        
+        # Use the existing fingerprint_device function to scan ports
+        def fingerprint_device_ports(ip):
+            """
+            Lightweight device fingerprinting for open ports.
+            Returns a list of open ports with their services.
+            """
+            common_ports = {
+                22: "ssh",
+                23: "telnet",
+                25: "smtp",
+                53: "dns",
+                80: "http",
+                110: "pop3",
+                143: "imap",
+                443: "https",
+                445: "smb",
+                465: "smtps",
+                587: "smtp",
+                636: "ldaps",
+                993: "imaps",
+                995: "pop3s",
+                3306: "mysql",
+                3389: "rdp",
+                5432: "postgresql",
+                5900: "vnc",
+                6379: "redis",
+                8080: "http-alt",
+                8443: "https-alt",
+                9200: "elasticsearch",
+                27017: "mongodb",
+                50070: "hadoop",
+                62078: "iphone-sync",
+                8009: "ajp13",
+            }
+            
+            open_ports = []
+            
+            for port in common_ports.keys():
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                
+                try:
+                    result = sock.connect_ex((str(ip), port))
+                    
+                    if result == 0:
+                        open_ports.append({
+                            "port": port,
+                            "service": common_ports[port],
+                            "protocol": "tcp"
+                        })
+                
+                except Exception:
+                    pass
+                
+                finally:
+                    sock.close()
+            
+            return open_ports
+        
+        # Scan the target IP for open ports
+        open_ports = fingerprint_device_ports(target_ip)
+        
+        return {
+            "success": True,
+            "ip": target_ip,
+            "open_ports": open_ports,
+            "port_count": len(open_ports)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Port scan error: {str(e)}"
+        )
+    
 
 
 
